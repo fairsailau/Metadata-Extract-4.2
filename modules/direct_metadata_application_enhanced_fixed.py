@@ -311,56 +311,128 @@ def apply_metadata_direct():
             # Get file object
             file_obj = client.file(file_id=file_id)
             
-            # Apply as global properties
-            try:
-                metadata = file_obj.metadata("global", "properties").create(metadata_values)
-                logger.info(f"Successfully applied metadata to file {file_name} ({file_id})")
-                return {
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "success": True,
-                    "metadata": metadata
-                }
-            except Exception as e:
-                if "already exists" in str(e).lower():
-                    # If metadata already exists, update it
-                    try:
-                        # Create update operations
-                        operations = []
-                        for key, value in metadata_values.items():
-                            operations.append({
-                                "op": "replace",
-                                "path": f"/{key}",
-                                "value": value
-                            })
-                        
-                        # Update metadata
-                        logger.info(f"Metadata already exists, updating with operations")
-                        metadata = file_obj.metadata("global", "properties").update(operations)
-                        
-                        logger.info(f"Successfully updated metadata for file {file_name} ({file_id})")
-                        return {
-                            "file_id": file_id,
-                            "file_name": file_name,
-                            "success": True,
-                            "metadata": metadata
-                        }
-                    except Exception as update_error:
-                        logger.error(f"Error updating metadata for file {file_name} ({file_id}): {str(update_error)}")
+            # Check if we're using structured extraction with a template
+            if "metadata_config" in st.session_state and st.session_state.metadata_config.get("extraction_method") == "structured" and st.session_state.metadata_config.get("use_template"):
+                # Get template information
+                template_id = st.session_state.metadata_config.get("template_id", "")
+                
+                # Parse the template ID to extract the correct components
+                # Format is typically: scope_id_templateKey (e.g., enterprise_336904155_financialReport)
+                parts = template_id.split('_')
+                
+                # Extract the scope and enterprise ID
+                scope = parts[0]  # e.g., "enterprise"
+                enterprise_id = parts[1] if len(parts) > 1 else ""
+                
+                # Extract the actual template key (last part)
+                template_key = parts[-1] if len(parts) > 2 else template_id
+                
+                # Format the scope with enterprise ID
+                scope_with_id = f"{scope}_{enterprise_id}"
+                
+                logger.info(f"Using template-based metadata application with scope: {scope_with_id}, template: {template_key}")
+                
+                try:
+                    # Apply metadata using the template
+                    metadata = file_obj.metadata(scope_with_id, template_key).create(metadata_values)
+                    logger.info(f"Successfully applied template metadata to file {file_name} ({file_id})")
+                    return {
+                        "file_id": file_id,
+                        "file_name": file_name,
+                        "success": True,
+                        "metadata": metadata
+                    }
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        # If metadata already exists, update it
+                        try:
+                            # Create update operations
+                            operations = []
+                            for key, value in metadata_values.items():
+                                operations.append({
+                                    "op": "replace",
+                                    "path": f"/{key}",
+                                    "value": value
+                                })
+                            
+                            # Update metadata
+                            logger.info(f"Template metadata already exists, updating with operations")
+                            metadata = file_obj.metadata(scope_with_id, template_key).update(operations)
+                            
+                            logger.info(f"Successfully updated template metadata for file {file_name} ({file_id})")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": True,
+                                "metadata": metadata
+                            }
+                        except Exception as update_error:
+                            logger.error(f"Error updating template metadata for file {file_name} ({file_id}): {str(update_error)}")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": False,
+                                "error": f"Error updating template metadata: {str(update_error)}"
+                            }
+                    else:
+                        logger.error(f"Error creating template metadata for file {file_name} ({file_id}): {str(e)}")
                         return {
                             "file_id": file_id,
                             "file_name": file_name,
                             "success": False,
-                            "error": f"Error updating metadata: {str(update_error)}"
+                            "error": f"Error creating template metadata: {str(e)}"
                         }
-                else:
-                    logger.error(f"Error creating metadata for file {file_name} ({file_id}): {str(e)}")
+            else:
+                # Apply as global properties (for freeform extraction)
+                try:
+                    metadata = file_obj.metadata("global", "properties").create(metadata_values)
+                    logger.info(f"Successfully applied metadata to file {file_name} ({file_id})")
                     return {
                         "file_id": file_id,
                         "file_name": file_name,
-                        "success": False,
-                        "error": f"Error creating metadata: {str(e)}"
+                        "success": True,
+                        "metadata": metadata
                     }
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        # If metadata already exists, update it
+                        try:
+                            # Create update operations
+                            operations = []
+                            for key, value in metadata_values.items():
+                                operations.append({
+                                    "op": "replace",
+                                    "path": f"/{key}",
+                                    "value": value
+                                })
+                            
+                            # Update metadata
+                            logger.info(f"Metadata already exists, updating with operations")
+                            metadata = file_obj.metadata("global", "properties").update(operations)
+                            
+                            logger.info(f"Successfully updated metadata for file {file_name} ({file_id})")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": True,
+                                "metadata": metadata
+                            }
+                        except Exception as update_error:
+                            logger.error(f"Error updating metadata for file {file_name} ({file_id}): {str(update_error)}")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": False,
+                                "error": f"Error updating metadata: {str(update_error)}"
+                            }
+                    else:
+                        logger.error(f"Error creating metadata for file {file_name} ({file_id}): {str(e)}")
+                        return {
+                            "file_id": file_id,
+                            "file_name": file_name,
+                            "success": False,
+                            "error": f"Error creating metadata: {str(e)}"
+                        }
         
         except Exception as e:
             logger.exception(f"Unexpected error applying metadata to file {file_id}: {str(e)}")
