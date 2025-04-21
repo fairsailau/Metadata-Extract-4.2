@@ -238,7 +238,8 @@ def extract_metadata_structured(client, file_id, template_id=None, custom_fields
             # Create metadata template reference
             metadata_template = {
                 "templateKey": template["key"],
-                "scope": template_id.split("_")[0]  # Extract scope from template_id
+                "scope": template_id.split("_")[0],  # Extract scope from template_id
+                "type": "metadata_template"  # Required field for the API
             }
         else:
             raise ValueError(f"Template with ID {template_id} not found")
