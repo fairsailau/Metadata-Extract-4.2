@@ -190,6 +190,51 @@ def get_file_specific_config(file_id):
         "template_id": "",
         "custom_prompt": ""
     })
+def flatten_metadata_for_template(metadata_values):
+    """
+    Flatten nested metadata structure for template-based metadata application.
+    
+    This function extracts fields from the 'answer' object and places them directly
+    at the top level, removing non-template fields like 'ai_agent_info', 'created_at',
+    and 'completion_reason'.
+    
+    Args:
+        metadata_values (dict): The metadata values to flatten
+        
+    Returns:
+        dict: Flattened metadata with fields at the top level
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Make a copy to avoid modifying the original
+    flattened_metadata = {}
+    
+    # Log the original metadata
+    logger.info(f"Original metadata before flattening: {metadata_values}")
+    
+    # Check if 'answer' field exists and is a dictionary
+    if 'answer' in metadata_values and isinstance(metadata_values['answer'], dict):
+        # Extract fields from 'answer' and place them at the top level
+        for key, value in metadata_values['answer'].items():
+            flattened_metadata[key] = value
+        logger.info(f"Extracted fields from 'answer' object: {list(flattened_metadata.keys())}")
+    else:
+        # If no 'answer' field or not a dictionary, use the original metadata
+        flattened_metadata = metadata_values.copy()
+        logger.info("No 'answer' field found or not a dictionary, using original metadata")
+    
+    # Remove non-template fields that should not be sent to Box API
+    fields_to_remove = ['ai_agent_info', 'created_at', 'completion_reason']
+    for field in fields_to_remove:
+        if field in flattened_metadata:
+            del flattened_metadata[field]
+            logger.info(f"Removed non-template field: {field}")
+    
+    # Log the flattened metadata
+    logger.info(f"Flattened metadata: {flattened_metadata}")
+    
+    return flattened_metadata
 
 def apply_metadata_to_file_enhanced(client, file_id, metadata_values, template_info=None):
     """
