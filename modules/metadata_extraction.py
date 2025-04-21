@@ -50,14 +50,16 @@ def metadata_extraction():
                 'Content-Type': 'application/json'
             }
             
-            # Create AI agent configuration
+            # Create AI agent configuration with proper format for structured extraction
             ai_agent = {
                 "type": "ai_agent_extract_structured",
                 "long_text": {
-                    "model": ai_model
+                    "model": ai_model,
+                    "mode": "default"
                 },
                 "basic_text": {
-                    "model": ai_model
+                    "model": ai_model,
+                    "mode": "default"
                 }
             }
             
@@ -77,7 +79,7 @@ def metadata_extraction():
             if metadata_template:
                 request_body["metadata_template"] = metadata_template
             elif fields:
-                # Convert fields to Box API format if needed
+            # Convert fields to Box API format if needed
                 api_fields = []
                 for field in fields:
                     if "key" in field:
@@ -87,7 +89,7 @@ def metadata_extraction():
                         # Convert field to Box API format
                         api_field = {
                             "key": field.get("name", ""),
-                            "display_name": field.get("display_name", field.get("name", "")),
+                            "displayName": field.get("display_name", field.get("name", "")),
                             "type": field.get("type", "string")
                         }
                         
