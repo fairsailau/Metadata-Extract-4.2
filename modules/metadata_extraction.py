@@ -237,10 +237,18 @@ def extract_metadata_structured(client, file_id, template_id=None, custom_fields
         # Get template details
         template = get_template_by_id(template_id)
         if template:
-            # Create metadata template reference
+            # Parse the template ID to extract the correct components
+            # Format is typically: scope_id_templateKey (e.g., enterprise_336904155_financialReport)
+            parts = template_id.split('_')
+            scope = parts[0]  # e.g., "enterprise"
+            
+            # Extract the actual template key (last part)
+            template_key = parts[-1] if len(parts) > 2 else template["key"]
+            
+            # Create metadata template reference with correct format
             metadata_template = {
-                "templateKey": template["key"],
-                "scope": template_id.split("_")[0],  # Extract scope from template_id
+                "templateKey": template_key,
+                "scope": scope,
                 "type": "metadata_template"  # Required field for the API
             }
         else:

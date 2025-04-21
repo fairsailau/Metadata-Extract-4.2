@@ -62,6 +62,10 @@ def metadata_config():
     # Extraction method selection
     st.subheader("Extraction Method")
     
+    # Ensure extraction_method is initialized in metadata_config
+    if "extraction_method" not in st.session_state.metadata_config:
+        st.session_state.metadata_config["extraction_method"] = "freeform"
+        
     extraction_method = st.radio(
         "Select extraction method",
         ["Freeform", "Structured"],
