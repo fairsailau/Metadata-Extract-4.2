@@ -1,390 +1,12 @@
 import streamlit as st
 import logging
 import json
-import re
-from datetime import datetime
 from boxsdk import Client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-def fix_value_field_type(metadata_values):
-    """
-    Fix the value field type by converting string values to numbers.
-    
-    This function specifically targets the 'value' field in metadata and ensures
-    it's converted to a number before being sent to the Box API.
-    
-    Args:
-        metadata_values (dict): The metadata values to process
-        
-    Returns:
-        dict: The processed metadata with value field converted to number if needed
-    """
-    # Make a copy to avoid modifying the original
-    fixed_metadata = metadata_values.copy()
-    
-    # Check if 'value' field exists
-    if 'value' in fixed_metadata:
-        value = fixed_metadata['value']
-        original_value = value
-        
-        # If value is a string that represents a number, convert it
-        if isinstance(value, str):
-            try:
-                # Try to convert to int first if it's a whole number
-                if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
-                    fixed_metadata['value'] = int(value)
-                    logger.info(f"Converted string value '{value}' to integer: {fixed_metadata['value']}")
-                # Otherwise try to convert to float
-                else:
-                    # Remove any non-numeric characters except decimal point and minus sign
-                    numeric_str = re.sub(r'[^\d.-]', '', value)
-                    if numeric_str:
-                        fixed_metadata['value'] = float(numeric_str)
-                        logger.info(f"Converted string value '{value}' to float: {fixed_metadata['value']}")
-                    else:
-                        logger.warning(f"Value '{value}' doesn't contain numeric characters, keeping as is")
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Could not convert value '{value}' to a number: {str(e)}")
-        
-        # Log the conversion result
-        if original_value != fixed_metadata['value']:
-            logger.info(f"Value field converted from {type(original_value).__name__} '{original_value}' to {type(fixed_metadata['value']).__name__} {fixed_metadata['value']}")
-    
-    return fixed_metadata
-
-def validate_metadata_fields(metadata_values, template_info=None):
-    """
-    Validate and fix metadata fields based on template requirements.
-    
-    This function performs basic validation and type conversion for common field types.
-    
-    Args:
-        metadata_values (dict): The metadata values to validate
-        template_info (dict, optional): Template information with field types
-        
-    Returns:
-        dict: The validated metadata with proper field types
-    """
-    # Make a copy to avoid modifying the original
-    validated_metadata = metadata_values.copy()
-    
-    # Always fix the value field
-    validated_metadata = fix_value_field_type(validated_metadata)
-    
-    # If template info is provided, perform additional validations
-    if template_info and 'fields' in template_info:
-        field_types = {field['key']: field['type'] for field in template_info['fields'] if 'key' in field and 'type' in field}
-        
-        for key, value in list(validated_metadata.items()):
-            if key in field_types:
-                field_type = field_types[key]
-                
-                # Convert based on field type
-                if field_type == 'float' and not isinstance(value, (int, float)):
-                    try:
-                        if isinstance(value, str):
-                            # Try to convert string to number
-                            numeric_str = re.sub(r'[^\d.-]', '', value)
-                            if numeric_str:
-                                if numeric_str.isdigit() or (numeric_str.startswith('-') and numeric_str[1:].isdigit()):
-                                    validated_metadata[key] = int(numeric_str)
-                                else:
-                                    validated_metadata[key] = float(numeric_str)
-                                logger.info(f"Converted field '{key}' from {type(value).__name__} '{value}' to {type(validated_metadata[key]).__name__} {validated_metadata[key]}")
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Could not convert field '{key}' to float: {str(e)}")
-                
-                elif field_type == 'date' and isinstance(value, str):
-                    # Ensure date is in ISO format
-                    if not re.match(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', value):
-                        try:
-                            # Try common date formats
-                            for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%Y/%m/%d']:
-                                try:
-                                    dt = datetime.strptime(value, fmt)
-                                    validated_metadata[key] = dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-                                    logger.info(f"Converted date field '{key}' to ISO format: {validated_metadata[key]}")
-                                    break
-                                except ValueError:
-                                    continue
-                        except Exception as e:
-                            logger.warning(f"Could not convert date field '{key}': {str(e)}")
-    
-    return validated_metadata
-
-def verify_metadata_application(result):
-    """
-    Verify the result of metadata application and provide detailed diagnostics.
-    
-    Args:
-        result (dict): The result of metadata application
-        
-    Returns:
-        dict: Verification result with diagnostics
-    """
-    verification = {
-        "success": result.get("success", False),
-        "file_id": result.get("file_id", ""),
-        "file_name": result.get("file_name", ""),
-        "diagnostics": []
-    }
-    
-    if result.get("success"):
-        verification["diagnostics"].append("✅ Metadata application successful")
-        
-        # Check if metadata was returned
-        if "metadata" in result:
-            metadata = result["metadata"]
-            verification["diagnostics"].append(f"✅ Metadata response received with {len(metadata)} fields")
-            
-            # Check if value field was properly converted
-            if "value" in metadata:
-                value = metadata["value"]
-                if isinstance(value, (int, float)):
-                    verification["diagnostics"].append(f"✅ Value field is correctly stored as a number: {value}")
-                else:
-                    verification["diagnostics"].append(f"⚠️ Value field is not stored as a number: {value} ({type(value).__name__})")
-        else:
-            verification["diagnostics"].append("⚠️ No metadata response in result")
-    else:
-        verification["diagnostics"].append("❌ Metadata application failed")
-        
-        # Check error message
-        if "error" in result:
-            error = result["error"]
-            verification["diagnostics"].append(f"❌ Error: {error}")
-            
-            # Check for common error patterns
-            if "invalid value" in error.lower() and "value" in error.lower():
-                verification["diagnostics"].append("❌ Error indicates value field type mismatch")
-                verification["diagnostics"].append("💡 Suggestion: Ensure value field is converted to a number")
-            elif "already exists" in error.lower():
-                verification["diagnostics"].append("❌ Error indicates metadata already exists")
-                verification["diagnostics"].append("💡 Suggestion: Use update operations instead of create")
-    
-    return verification
-
-def get_file_specific_config(file_id):
-    """
-    Get the specific metadata configuration for a file.
-    
-    Args:
-        file_id: The ID of the file to get configuration for
-        
-    Returns:
-        Dict containing the file's metadata configuration
-    """
-    if "file_metadata_config" not in st.session_state:
-        return {
-            "extraction_method": "structured",
-            "template_id": "",
-            "custom_prompt": ""
-        }
-    
-    return st.session_state.file_metadata_config.get(file_id, {
-        "extraction_method": "structured",
-        "template_id": "",
-        "custom_prompt": ""
-    })
-def flatten_metadata_for_template(metadata_values):
-    """
-    Flatten nested metadata structure for template-based metadata application.
-    
-    This function extracts fields from the 'answer' object and places them directly
-    at the top level, removing non-template fields like 'ai_agent_info', 'created_at',
-    and 'completion_reason'.
-    
-    Args:
-        metadata_values (dict): The metadata values to flatten
-        
-    Returns:
-        dict: Flattened metadata with fields at the top level
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Make a copy to avoid modifying the original
-    flattened_metadata = {}
-    
-    # Log the original metadata
-    logger.info(f"Original metadata before flattening: {metadata_values}")
-    
-    # Check if 'answer' field exists and is a dictionary
-    if 'answer' in metadata_values and isinstance(metadata_values['answer'], dict):
-        # Extract fields from 'answer' and place them at the top level
-        for key, value in metadata_values['answer'].items():
-            flattened_metadata[key] = value
-        logger.info(f"Extracted fields from 'answer' object: {list(flattened_metadata.keys())}")
-    else:
-        # If no 'answer' field or not a dictionary, use the original metadata
-        flattened_metadata = metadata_values.copy()
-        logger.info("No 'answer' field found or not a dictionary, using original metadata")
-    
-    # Remove non-template fields that should not be sent to Box API
-    fields_to_remove = ['ai_agent_info', 'created_at', 'completion_reason']
-    for field in fields_to_remove:
-        if field in flattened_metadata:
-            del flattened_metadata[field]
-            logger.info(f"Removed non-template field: {field}")
-    
-    # Log the flattened metadata
-    logger.info(f"Flattened metadata: {flattened_metadata}")
-    
-    return flattened_metadata
-
-def apply_metadata_to_file_enhanced(client, file_id, metadata_values, template_info=None):
-    """
-    Enhanced function to apply metadata to a file with robust error handling and debugging.
-    
-    Args:
-        client: Box client object
-        file_id: File ID to apply metadata to
-        metadata_values: Dictionary of metadata values to apply
-        template_info: Optional template information with field types
-        
-    Returns:
-        dict: Result of metadata application
-    """
-    file_name = f"File {file_id}"
-    try:
-        # Get file object
-        file_obj = client.file(file_id=file_id)
-        file_name = file_obj.get().name
-        
-        # Log original metadata values
-        logger.info(f"Original metadata values for file {file_name} ({file_id}): {json.dumps(metadata_values, default=str)}")
-        
-        # Validate and fix metadata fields
-        validated_metadata = validate_metadata_fields(metadata_values, template_info)
-        
-        # Log validated metadata
-        logger.info(f"Validated metadata for file {file_name} ({file_id}): {json.dumps(validated_metadata, default=str)}")
-        
-        # Check if we're using a template
-        if template_info:
-            scope = template_info.get('scope', 'enterprise')
-            enterprise_id = template_info.get('enterprise_id', '')
-            template_key = template_info.get('template_key', '')
-            
-            # Format the scope with enterprise ID
-            scope_with_id = f"{scope}_{enterprise_id}" if enterprise_id else scope
-            
-            logger.info(f"Using template-based metadata application with scope: {scope_with_id}, template: {template_key}")
-            
-            try:
-                # Apply metadata using the template
-                metadata = file_obj.metadata(scope_with_id, template_key).create(validated_metadata)
-                logger.info(f"Successfully applied template metadata to file {file_name} ({file_id})")
-                return {
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "success": True,
-                    "metadata": metadata
-                }
-            except Exception as e:
-                if "already exists" in str(e).lower():
-                    # If metadata already exists, update it
-                    try:
-                        # Create update operations
-                        operations = []
-                        for key, value in validated_metadata.items():
-                            operations.append({
-                                "op": "replace",
-                                "path": f"/{key}",
-                                "value": value
-                            })
-                        
-                        # Update metadata
-                        logger.info(f"Template metadata already exists, updating with operations")
-                        metadata = file_obj.metadata(scope_with_id, template_key).update(operations)
-                        
-                        logger.info(f"Successfully updated template metadata for file {file_name} ({file_id})")
-                        return {
-                            "file_id": file_id,
-                            "file_name": file_name,
-                            "success": True,
-                            "metadata": metadata
-                        }
-                    except Exception as update_error:
-                        logger.error(f"Error updating template metadata for file {file_name} ({file_id}): {str(update_error)}")
-                        return {
-                            "file_id": file_id,
-                            "file_name": file_name,
-                            "success": False,
-                            "error": f"Error updating template metadata: {str(update_error)}"
-                        }
-                else:
-                    logger.error(f"Error creating template metadata for file {file_name} ({file_id}): {str(e)}")
-                    return {
-                        "file_id": file_id,
-                        "file_name": file_name,
-                        "success": False,
-                        "error": f"Error creating template metadata: {str(e)}"
-                    }
-        else:
-            # Apply freeform metadata
-            try:
-                # Apply metadata
-                metadata = file_obj.metadata().create(validated_metadata)
-                logger.info(f"Successfully applied freeform metadata to file {file_name} ({file_id})")
-                return {
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "success": True,
-                    "metadata": metadata
-                }
-            except Exception as e:
-                if "already exists" in str(e).lower():
-                    # If metadata already exists, update it
-                    try:
-                        # Create update operations
-                        operations = []
-                        for key, value in validated_metadata.items():
-                            operations.append({
-                                "op": "replace",
-                                "path": f"/{key}",
-                                "value": value
-                            })
-                        
-                        # Update metadata
-                        logger.info(f"Metadata already exists, updating with operations")
-                        metadata = file_obj.metadata("global", "properties").update(operations)
-                        
-                        logger.info(f"Successfully updated metadata for file {file_name} ({file_id})")
-                        return {
-                            "file_id": file_id,
-                            "file_name": file_name,
-                            "success": True,
-                            "metadata": metadata
-                        }
-                    except Exception as update_error:
-                        logger.error(f"Error updating metadata for file {file_name} ({file_id}): {str(update_error)}")
-                        return {
-                            "file_id": file_id,
-                            "file_name": file_name,
-                            "success": False,
-                            "error": f"Error updating metadata: {str(update_error)}"
-                        }
-                else:
-                    logger.error(f"Error creating metadata for file {file_name} ({file_id}): {str(e)}")
-                    return {
-                        "file_id": file_id,
-                        "file_name": file_name,
-                        "success": False,
-                        "error": f"Error creating metadata: {str(e)}"
-                    }
-    except Exception as e:
-        logger.exception(f"Unexpected error applying metadata to file {file_id}: {str(e)}")
-        return {
-            "file_id": file_id,
-            "file_name": file_name,
-            "success": False,
-            "error": f"Unexpected error: {str(e)}"
-        }
 
 def apply_metadata_direct():
     """
@@ -616,6 +238,211 @@ def apply_metadata_direct():
         value_lower = value.lower()
         return any(indicator in value_lower for indicator in placeholder_indicators)
     
+    # Direct function to apply metadata to a single file
+    def apply_metadata_to_file_direct(client, file_id, metadata_values):
+        """
+        Apply metadata to a single file with direct client reference
+        
+        Args:
+            client: Box client object
+            file_id: File ID to apply metadata to
+            metadata_values: Dictionary of metadata values to apply
+            
+        Returns:
+            dict: Result of metadata application
+        """
+        try:
+            file_name = file_id_to_file_name.get(file_id, "Unknown")
+            
+            # CRITICAL FIX: Validate metadata values
+            if not metadata_values:
+                logger.error(f"No metadata found for file {file_name} ({file_id})")
+                return {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "success": False,
+                    "error": "No metadata found for this file"
+                }
+            
+            # Filter out placeholder values if requested
+            if filter_placeholders:
+                filtered_metadata = {}
+                for key, value in metadata_values.items():
+                    if not is_placeholder(value):
+                        filtered_metadata[key] = value
+                
+                # If all values were placeholders, keep at least one for debugging
+                if not filtered_metadata and metadata_values:
+                    # Get the first key-value pair
+                    first_key = next(iter(metadata_values))
+                    filtered_metadata[first_key] = metadata_values[first_key]
+                    filtered_metadata["_note"] = "All other values were placeholders"
+                
+                metadata_values = filtered_metadata
+            
+            # If no metadata values after filtering, return error
+            if not metadata_values:
+                logger.warning(f"No valid metadata found for file {file_name} ({file_id}) after filtering")
+                return {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "success": False,
+                    "error": "No valid metadata found after filtering placeholders"
+                }
+            
+            # Normalize keys if requested
+            if normalize_keys:
+                normalized_metadata = {}
+                for key, value in metadata_values.items():
+                    # Convert to lowercase and replace spaces with underscores
+                    normalized_key = key.lower().replace(" ", "_").replace("-", "_")
+                    normalized_metadata[normalized_key] = value
+                metadata_values = normalized_metadata
+            
+            # Convert all values to strings for Box metadata
+            for key, value in metadata_values.items():
+                if not isinstance(value, (str, int, float, bool)):
+                    metadata_values[key] = str(value)
+            
+            # Debug logging
+            logger.info(f"Applying metadata for file: {file_name} ({file_id})")
+            logger.info(f"Metadata values: {json.dumps(metadata_values, default=str)}")
+            
+            # Get file object
+            file_obj = client.file(file_id=file_id)
+            
+            # Check if we're using structured extraction with a template
+            if "metadata_config" in st.session_state and st.session_state.metadata_config.get("extraction_method") == "structured" and st.session_state.metadata_config.get("use_template"):
+                # Get template information
+                template_id = st.session_state.metadata_config.get("template_id", "")
+                
+                # Parse the template ID to extract the correct components
+                # Format is typically: scope_id_templateKey (e.g., enterprise_336904155_financialReport)
+                parts = template_id.split('_')
+                
+                # Extract the scope and enterprise ID
+                scope = parts[0]  # e.g., "enterprise"
+                enterprise_id = parts[1] if len(parts) > 1 else ""
+                
+                # Extract the actual template key (last part)
+                template_key = parts[-1] if len(parts) > 2 else template_id
+                
+                # Format the scope with enterprise ID
+                scope_with_id = f"{scope}_{enterprise_id}"
+                
+                logger.info(f"Using template-based metadata application with scope: {scope_with_id}, template: {template_key}")
+                
+                try:
+                    # Apply metadata using the template
+                    metadata = file_obj.metadata(scope_with_id, template_key).create(metadata_values)
+                    logger.info(f"Successfully applied template metadata to file {file_name} ({file_id})")
+                    return {
+                        "file_id": file_id,
+                        "file_name": file_name,
+                        "success": True,
+                        "metadata": metadata
+                    }
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        # If metadata already exists, update it
+                        try:
+                            # Create update operations
+                            operations = []
+                            for key, value in metadata_values.items():
+                                operations.append({
+                                    "op": "replace",
+                                    "path": f"/{key}",
+                                    "value": value
+                                })
+                            
+                            # Update metadata
+                            logger.info(f"Template metadata already exists, updating with operations")
+                            metadata = file_obj.metadata(scope_with_id, template_key).update(operations)
+                            
+                            logger.info(f"Successfully updated template metadata for file {file_name} ({file_id})")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": True,
+                                "metadata": metadata
+                            }
+                        except Exception as update_error:
+                            logger.error(f"Error updating template metadata for file {file_name} ({file_id}): {str(update_error)}")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": False,
+                                "error": f"Error updating template metadata: {str(update_error)}"
+                            }
+                    else:
+                        logger.error(f"Error creating template metadata for file {file_name} ({file_id}): {str(e)}")
+                        return {
+                            "file_id": file_id,
+                            "file_name": file_name,
+                            "success": False,
+                            "error": f"Error creating template metadata: {str(e)}"
+                        }
+            else:
+                # Apply as global properties (for freeform extraction)
+                try:
+                    metadata = file_obj.metadata("global", "properties").create(metadata_values)
+                    logger.info(f"Successfully applied metadata to file {file_name} ({file_id})")
+                    return {
+                        "file_id": file_id,
+                        "file_name": file_name,
+                        "success": True,
+                        "metadata": metadata
+                    }
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        # If metadata already exists, update it
+                        try:
+                            # Create update operations
+                            operations = []
+                            for key, value in metadata_values.items():
+                                operations.append({
+                                    "op": "replace",
+                                    "path": f"/{key}",
+                                    "value": value
+                                })
+                            
+                            # Update metadata
+                            logger.info(f"Metadata already exists, updating with operations")
+                            metadata = file_obj.metadata("global", "properties").update(operations)
+                            
+                            logger.info(f"Successfully updated metadata for file {file_name} ({file_id})")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": True,
+                                "metadata": metadata
+                            }
+                        except Exception as update_error:
+                            logger.error(f"Error updating metadata for file {file_name} ({file_id}): {str(update_error)}")
+                            return {
+                                "file_id": file_id,
+                                "file_name": file_name,
+                                "success": False,
+                                "error": f"Error updating metadata: {str(update_error)}"
+                            }
+                    else:
+                        logger.error(f"Error creating metadata for file {file_name} ({file_id}): {str(e)}")
+                        return {
+                            "file_id": file_id,
+                            "file_name": file_name,
+                            "success": False,
+                            "error": f"Error creating metadata: {str(e)}"
+                        }
+        
+        except Exception as e:
+            logger.exception(f"Unexpected error applying metadata to file {file_id}: {str(e)}")
+            return {
+                "file_id": file_id,
+                "file_name": file_id_to_file_name.get(file_id, "Unknown"),
+                "success": False,
+                "error": f"Unexpected error: {str(e)}"
+            }
+    
     # Handle apply button click - DIRECT APPROACH WITHOUT THREADING
     if apply_button:
         # Check if client exists directly again
@@ -645,43 +472,8 @@ def apply_metadata_direct():
             # CRITICAL FIX: Log the metadata values before application
             logger.info(f"Metadata values for file {file_name} ({file_id}) before application: {json.dumps(metadata_values, default=str)}")
             
-            # Get file-specific configuration
-            file_config = get_file_specific_config(file_id)
-            extraction_method = file_config.get("extraction_method", "structured")
-            
-            # Apply metadata based on extraction method and configuration
-            if extraction_method == "structured" and "metadata_config" in st.session_state:
-                # Get template information
-                template_id = file_config.get("template_id", "")
-                if not template_id and st.session_state.metadata_config.get("use_template"):
-                    template_id = st.session_state.metadata_config.get("template_id", "")
-                
-                if template_id:
-                    # Parse the template ID
-                    parts = template_id.split('_')
-                    scope = parts[0]  # e.g., "enterprise"
-                    enterprise_id = parts[1] if len(parts) > 1 else ""
-                    template_key = parts[-1] if len(parts) > 2 else template_id
-                    
-                    # Create template info
-                    template_info = {
-                        "scope": scope,
-                        "enterprise_id": enterprise_id,
-                        "template_key": template_key
-                    }
-                    
-                    # Apply metadata with enhanced function
-                    result = apply_metadata_to_file_enhanced(client, file_id, metadata_values, template_info)
-                else:
-                    # No template specified, use freeform
-                    result = apply_metadata_to_file_enhanced(client, file_id, metadata_values)
-            else:
-                # Freeform metadata
-                result = apply_metadata_to_file_enhanced(client, file_id, metadata_values)
-            
-            # Verify the result
-            verification = verify_metadata_application(result)
-            logger.info(f"Verification result: {json.dumps(verification, default=str)}")
+            # Apply metadata directly
+            result = apply_metadata_to_file_direct(client, file_id, metadata_values)
             
             if result["success"]:
                 results.append(result)
@@ -704,12 +496,6 @@ def apply_metadata_direct():
             with st.expander("View Errors"):
                 for error in errors:
                     st.write(f"**{error['file_name']}:** {error['error']}")
-                    
-                    # Add diagnostics for better troubleshooting
-                    verification = verify_metadata_application(error)
-                    st.write("**Diagnostics:**")
-                    for diagnostic in verification["diagnostics"]:
-                        st.write(f"- {diagnostic}")
         
         if results:
             with st.expander("View Successful Applications"):
