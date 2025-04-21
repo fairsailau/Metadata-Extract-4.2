@@ -8,37 +8,6 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def fix_metadata_format(metadata_values):
-    """
-    Fix the metadata format by converting string representations of dictionaries
-    to actual Python dictionaries.
-    
-    Args:
-        metadata_values (dict): The original metadata values dictionary
-        
-    Returns:
-        dict: A new dictionary with properly formatted metadata values
-    """
-    formatted_metadata = {}
-    
-    for key, value in metadata_values.items():
-        # If the value is a string that looks like a dictionary, parse it
-        if isinstance(value, str) and value.startswith('{') and value.endswith('}'):
-            try:
-                # Replace single quotes with double quotes for JSON compatibility
-                json_compatible_str = value.replace("'", '"')
-                # Parse the string representation into a proper Python dictionary
-                parsed_value = json.loads(json_compatible_str)
-                formatted_metadata[key] = parsed_value
-            except json.JSONDecodeError:
-                # If parsing fails, keep the original string value
-                formatted_metadata[key] = value
-        else:
-            # For non-dictionary string values, keep as is
-            formatted_metadata[key] = value
-    
-    return formatted_metadata
-
 def apply_metadata_direct():
     """
     Direct approach to apply metadata to Box files with comprehensive fixes
@@ -364,11 +333,8 @@ def apply_metadata_direct():
                 logger.info(f"Using template-based metadata application with scope: {scope_with_id}, template: {template_key}")
                 
                 try:
-                    # FIX: Format metadata values properly before sending to Box API
-                    formatted_metadata = fix_metadata_format(metadata_values)
-                    
-                    # Apply metadata using the template with properly formatted metadata
-                    metadata = file_obj.metadata(scope_with_id, template_key).create(formatted_metadata)
+                    # Apply metadata using the template
+                    metadata = file_obj.metadata(scope_with_id, template_key).create(metadata_values)
                     logger.info(f"Successfully applied template metadata to file {file_name} ({file_id})")
                     return {
                         "file_id": file_id,
@@ -380,12 +346,9 @@ def apply_metadata_direct():
                     if "already exists" in str(e).lower():
                         # If metadata already exists, update it
                         try:
-                            # FIX: Format metadata values properly before creating operations
-                            formatted_metadata = fix_metadata_format(metadata_values)
-                            
                             # Create update operations
                             operations = []
-                            for key, value in formatted_metadata.items():
+                            for key, value in metadata_values.items():
                                 operations.append({
                                     "op": "replace",
                                     "path": f"/{key}",
@@ -420,9 +383,8 @@ def apply_metadata_direct():
                             "error": f"Error creating template metadata: {str(e)}"
                         }
             else:
-                # For non-template metadata (freeform), apply as properties
+                # Apply as global properties (for freeform extraction)
                 try:
-                    # Apply metadata as properties
                     metadata = file_obj.metadata("global", "properties").create(metadata_values)
                     logger.info(f"Successfully applied metadata to file {file_name} ({file_id})")
                     return {
@@ -536,11 +498,11 @@ def apply_metadata_direct():
                     st.write(f"**{error['file_name']}:** {error['error']}")
         
         if results:
-            with st.expander("View Results"):
+            with st.expander("View Successful Applications"):
                 for result in results:
                     st.write(f"**{result['file_name']}:** Metadata applied successfully")
     
     # Handle cancel button click
     if cancel_button:
-        st.session_state.current_page = "Home"
+        st.warning("Operation cancelled.")
         st.rerun()
