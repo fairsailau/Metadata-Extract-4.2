@@ -481,11 +481,23 @@ def process_file(file, extraction_functions):
             if st.session_state.metadata_config["use_template"]:
                 # Template-based extraction
                 template_id = st.session_state.metadata_config["template_id"]
-                # FIXED: Ensure correct format for metadata template
+                
+                # Parse the template ID to extract the correct components
+                # Format is typically: scope_id_templateKey (e.g., enterprise_336904155_financialReport)
+                parts = template_id.split('_')
+                
+                # Extract the scope and enterprise ID
+                scope = parts[0]  # e.g., "enterprise"
+                enterprise_id = parts[1] if len(parts) > 1 else ""
+                
+                # Extract the actual template key (last part)
+                template_key = parts[-1] if len(parts) > 2 else template_id
+                
+                # Create metadata template reference with correct format according to Box API documentation
                 metadata_template = {
-                    "templateKey": template_id.split("_")[1] if "_" in template_id else template_id,
-                    "scope": template_id.split("_")[0] if "_" in template_id else "enterprise",
-                    "type": "metadata_template"
+                    "template_key": template_key,
+                    "type": "metadata_template",
+                    "scope": f"{scope}_{enterprise_id}"
                 }
                 
                 logger.info(f"Using template-based extraction with template ID: {template_id}")
