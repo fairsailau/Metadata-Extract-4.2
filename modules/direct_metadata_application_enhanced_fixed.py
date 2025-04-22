@@ -8,6 +8,68 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def fix_metadata_format(metadata_values):
+    """
+    Fix the metadata format by converting string representations of dictionaries
+    to actual Python dictionaries.
+    
+    Args:
+        metadata_values (dict): The original metadata values dictionary
+        
+    Returns:
+        dict: A new dictionary with properly formatted metadata values
+    """
+    formatted_metadata = {}
+    
+    for key, value in metadata_values.items():
+        # If the value is a string that looks like a dictionary, parse it
+        if isinstance(value, str) and value.startswith('{') and value.endswith('}'):
+            try:
+                # Replace single quotes with double quotes for JSON compatibility
+                json_compatible_str = value.replace("'", '"')
+                # Parse the string representation into a proper Python dictionary
+                parsed_value = json.loads(json_compatible_str)
+                formatted_metadata[key] = parsed_value
+            except json.JSONDecodeError:
+                # If parsing fails, keep the original string value
+                formatted_metadata[key] = value
+        else:
+            # For non-dictionary string values, keep as is
+            formatted_metadata[key] = value
+    
+    return formatted_metadata
+
+def flatten_metadata_for_template(metadata_values):
+    """
+    Flatten the metadata structure by extracting fields from the 'answer' object
+    and placing them directly at the top level to match the template structure.
+    
+    Args:
+        metadata_values (dict): The metadata values with nested objects
+        
+    Returns:
+        dict: A flattened dictionary with fields at the top level
+    """
+    flattened_metadata = {}
+    
+    # Check if 'answer' exists and is a dictionary
+    if 'answer' in metadata_values and isinstance(metadata_values['answer'], dict):
+        # Extract fields from the 'answer' object and place them at the top level
+        for key, value in metadata_values['answer'].items():
+            flattened_metadata[key] = value
+    else:
+        # If there's no 'answer' object, use the original metadata
+        flattened_metadata = metadata_values.copy()
+    
+    # Remove any non-template fields that shouldn't be sent to Box API
+    # These are fields that are used internally but not part of the template
+    keys_to_remove = ['ai_agent_info', 'created_at', 'completion_reason', 'answer']
+    for key in keys_to_remove:
+        if key in flattened_metadata:
+            del flattened_metadata[key]
+    
+    return flattened_metadata
+
 def apply_metadata_direct():
     """
     Direct approach to apply metadata to Box files with comprehensive fixes
@@ -264,6 +326,9 @@ def apply_metadata_direct():
                     "error": "No metadata found for this file"
                 }
             
+            # Log original metadata values for debugging
+            logger.info(f"Original metadata values for file {file_name} ({file_id}): {json.dumps(metadata_values, default=str)}")
+            
             # Filter out placeholder values if requested
             if filter_placeholders:
                 filtered_metadata = {}
@@ -306,7 +371,7 @@ def apply_metadata_direct():
             
             # Debug logging
             logger.info(f"Applying metadata for file: {file_name} ({file_id})")
-            logger.info(f"Metadata values: {json.dumps(metadata_values, default=str)}")
+            logger.info(f"Metadata values after normalization: {json.dumps(metadata_values, default=str)}")
             
             # Get file object
             file_obj = client.file(file_id=file_id)
@@ -333,8 +398,19 @@ def apply_metadata_direct():
                 logger.info(f"Using template-based metadata application with scope: {scope_with_id}, template: {template_key}")
                 
                 try:
-                    # Apply metadata using the template
-                    metadata = file_obj.metadata(scope_with_id, template_key).create(metadata_values)
+                    # ENHANCED FIX: Step 1 - Fix metadata format by converting string representations to dictionaries
+                    formatted_metadata = fix_metadata_format(metadata_values)
+                    logger.info(f"Formatted metadata after fix_metadata_format: {json.dumps(formatted_metadata, default=str)}")
+                    
+                    # ENHANCED FIX: Step 2 - Flatten metadata structure to match template requirements
+                    flattened_metadata = flatten_metadata_for_template(formatted_metadata)
+                    logger.info(f"Flattened metadata after flatten_metadata_for_template: {json.dumps(flattened_metadata, default=str)}")
+                    
+                    # Log the flattened metadata being sent to Box API
+                    logger.info(f"Sending flattened metadata to Box API: {json.dumps(flattened_metadata, default=str)}")
+                    
+                    # Apply metadata using the template with properly formatted and flattened metadata
+                    metadata = file_obj.metadata(scope_with_id, template_key).create(flattened_metadata)
                     logger.info(f"Successfully applied template metadata to file {file_name} ({file_id})")
                     return {
                         "file_id": file_id,
@@ -346,9 +422,20 @@ def apply_metadata_direct():
                     if "already exists" in str(e).lower():
                         # If metadata already exists, update it
                         try:
-                            # Create update operations
+                            # ENHANCED FIX: Step 1 - Fix metadata format by converting string representations to dictionaries
+                            formatted_metadata = fix_metadata_format(metadata_values)
+                            logger.info(f"Formatted metadata after fix_metadata_format (update path): {json.dumps(formatted_metadata, default=str)}")
+                            
+                            # ENHANCED FIX: Step 2 - Flatten metadata structure to match template requirements
+                            flattened_metadata = flatten_metadata_for_template(formatted_metadata)
+                            logger.info(f"Flattened metadata after flatten_metadata_for_template (update path): {json.dumps(flattened_metadata, default=str)}")
+                            
+                            # Log the flattened metadata being sent to Box API
+                            logger.info(f"Updating with flattened metadata: {json.dumps(flattened_metadata, default=str)}")
+                            
+                            # Create update operations with flattened metadata
                             operations = []
-                            for key, value in metadata_values.items():
+                            for key, value in flattened_metadata.items():
                                 operations.append({
                                     "op": "replace",
                                     "path": f"/{key}",
@@ -356,7 +443,7 @@ def apply_metadata_direct():
                                 })
                             
                             # Update metadata
-                            logger.info(f"Template metadata already exists, updating with operations")
+                            logger.info(f"Template metadata already exists, updating with operations: {json.dumps(operations, default=str)}")
                             metadata = file_obj.metadata(scope_with_id, template_key).update(operations)
                             
                             logger.info(f"Successfully updated template metadata for file {file_name} ({file_id})")
@@ -383,8 +470,9 @@ def apply_metadata_direct():
                             "error": f"Error creating template metadata: {str(e)}"
                         }
             else:
-                # Apply as global properties (for freeform extraction)
+                # For non-template metadata (freeform), apply as properties
                 try:
+                    # Apply metadata as properties
                     metadata = file_obj.metadata("global", "properties").create(metadata_values)
                     logger.info(f"Successfully applied metadata to file {file_name} ({file_id})")
                     return {
@@ -498,11 +586,11 @@ def apply_metadata_direct():
                     st.write(f"**{error['file_name']}:** {error['error']}")
         
         if results:
-            with st.expander("View Successful Applications"):
+            with st.expander("View Results"):
                 for result in results:
                     st.write(f"**{result['file_name']}:** Metadata applied successfully")
     
     # Handle cancel button click
     if cancel_button:
-        st.warning("Operation cancelled.")
+        st.session_state.current_page = "Home"
         st.rerun()
